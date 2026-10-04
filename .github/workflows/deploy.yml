@@ -1,0 +1,90 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  # Lets you redeploy from the Actions tab without pushing a commit — useful
+  # after changing the Supabase variables below.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it; queue anything newer.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      # Checked before building, against the values themselves. Grepping the
+      # bundle afterwards does not work: when these are blank the fallback
+      # string is unreachable, so the minifier drops it and the grep finds
+      # nothing to complain about.
+      - name: Check Supabase credentials are present
+        env:
+          URL: ${{ vars.VITE_SUPABASE_URL }}
+          KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+        run: |
+          missing=0
+          [ -n "$URL" ] || { echo "::error::VITE_SUPABASE_URL is not set."; missing=1; }
+          [ -n "$KEY" ] || { echo "::error::VITE_SUPABASE_ANON_KEY is not set."; missing=1; }
+          if [ "$missing" -ne 0 ]; then
+            echo "::error::Add them under Settings -> Secrets and variables -> Actions -> Variables, then re-run this workflow."
+            exit 1
+          fi
+
+      - name: Build
+        env:
+          # Vite inlines these at build time, so they must be present here or
+          # the deployed app shows its "Supabase is not configured" screen.
+          # The anon key is public by design — it is in the shipped bundle
+          # either way, and row level security is what protects the data.
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+          # Serve from https://<user>.github.io/<repo>/
+          BASE_PATH: /${{ github.event.repository.name }}/
+        run: npm run build
+
+      # Confirms Vite actually inlined the values, rather than the build
+      # merely having had them in its environment.
+      - name: Verify credentials reached the bundle
+        env:
+          URL: ${{ vars.VITE_SUPABASE_URL }}
+        run: |
+          host=$(printf '%s' "$URL" | sed -E 's#^https?://##; s#/.*##')
+          if ! grep -rqF "$host" dist/assets; then
+            echo "::error::The built bundle does not contain $host — the Supabase URL was not inlined."
+            exit 1
+          fi
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

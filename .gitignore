@@ -1,0 +1,15 @@
+node_modules/
+dist/
+*.log
+.DS_Store
+
+# The Supabase URL and key live in .env.local; only the template is tracked.
+.env*
+!.env.example
+
+# Machine-specific Claude Code permissions
+.claude/settings.local.json
+
+# Anything with real student names in it stays on this machine. The repository
+# is public; supabase/schema.sql (tables only) is the tracked copy.
+supabase/*private*.sql
